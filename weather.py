@@ -37,7 +37,8 @@ def wmo(icon):
 
 def get_json(url):
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=15) as response:
+    # Two requests must fit in the 30 s Dux Shell gives a plugin.
+    with urllib.request.urlopen(request, timeout=10) as response:
         return json.load(response)
 
 
@@ -59,6 +60,8 @@ def postcode(lat, lon):
     except (OSError, ValueError):
         cache = {}
     if key in cache:
+        if cache[key] is None:
+            raise SystemExit("MeteoSwiss covers Switzerland only")
         return cache[key]
 
     query = urllib.parse.urlencode({
@@ -71,14 +74,15 @@ def postcode(lat, lon):
     })
     results = get_json(f"{SWISSTOPO}?{query}").get("results") or []
     attrs = results[0].get("attributes", {}) if results else {}
-    if not isinstance(attrs.get("plz"), int):
-        raise SystemExit("MeteoSwiss covers Switzerland only")
-    code = attrs["plz"] * 100 + int(attrs.get("zusziff") or 0)
+    # Remember misses too, so a location abroad is not looked up on every refresh.
+    code = attrs["plz"] * 100 + int(attrs.get("zusziff") or 0) if isinstance(attrs.get("plz"), int) else None
 
     cache[key] = code
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cache, f)
+    if code is None:
+        raise SystemExit("MeteoSwiss covers Switzerland only")
     return code
 
 
