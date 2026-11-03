@@ -49,8 +49,8 @@ official legend "Wettersymbole: Texte/Übersetzungen".
 
 ## How it works
 
-Dux Shell runs `weather.py <latitude> <longitude>` about every 15 minutes. The
-script:
+About every 15 minutes Dux Shell runs `weather.py` with the coordinates as
+JSON on stdin (`{"latitude": 46.948, "longitude": 7.4474}`). The script:
 
 1. Looks up the postcode for the coordinates with the swisstopo API
    (official directory of localities). The result is cached in
@@ -63,8 +63,10 @@ script:
 Test it by hand:
 
 ```sh
-./weather.py 46.948 7.4474 | python3 -m json.tool | head
+echo '{"latitude": 46.948, "longitude": 7.4474}' | ./weather.py | python3 -m json.tool | head
 ```
+
+`./weather.py 46.948 7.4474` works as well.
 
 ## Limits
 

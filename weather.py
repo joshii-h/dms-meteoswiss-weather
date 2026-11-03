@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """MeteoSwiss forecast for Dux Shell, printed as an Open-Meteo response.
 
-Usage: weather.py <latitude> <longitude>
+Dux Shell sends {"latitude": 46.95, "longitude": 7.45} on stdin. For a test
+by hand the coordinates can also be given as arguments:
+weather.py <latitude> <longitude>
 
 The forecast comes from the endpoint behind the MeteoSwiss app, keyed by a
 six-digit postcode that swisstopo resolves from the coordinates. That endpoint
@@ -154,9 +156,13 @@ def to_open_meteo(data):
 
 
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) == 3:
+        lat, lon = float(sys.argv[1]), float(sys.argv[2])
+    elif len(sys.argv) == 1:
+        query = json.load(sys.stdin)
+        lat, lon = float(query["latitude"]), float(query["longitude"])
+    else:
         raise SystemExit(__doc__)
-    lat, lon = float(sys.argv[1]), float(sys.argv[2])
     data = get_json(FORECAST.format(postcode(lat, lon)))
     json.dump(to_open_meteo(data), sys.stdout)
 
