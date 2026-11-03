@@ -12,26 +12,40 @@ postcode, so the script fails and Dux Shell moves on to the next provider.
 """
 
 import json
+import math
 import os
 import sys
 import time
 import urllib.parse
+import tempfile
 import urllib.request
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 USER_AGENT = "dms-meteoswiss-weather (+https://github.com/joshii-h/dms-meteoswiss-weather)"
 SWISSTOPO = "https://api3.geo.admin.ch/rest/services/api/MapServer/identify"
 FORECAST = "https://app-prod-ws.meteoswiss-app.ch/v1/plzDetail?plz={}"
 HOUR_MS = 3600 * 1000
+# Dux Shell stops a plugin after 15 s; both requests share this budget.
+DEADLINE = time.monotonic() + 12
+
+try:
+    ZONE_NAME, ZONE = "Europe/Zurich", ZoneInfo("Europe/Zurich")
+except ZoneInfoNotFoundError:
+    ZONE_NAME, ZONE = "", None
 
 # MeteoSwiss pictograms 1-42 (night variants add 100) to WMO weather codes,
 # after the official legend "Wettersymbole: Texte/Übersetzungen".
-WMO = [None, 0, 1, 2, 2, 3, 80, 80, 85, 80, 80, 85, 95, 95, 61, 66, 71, 63, 66, 73, 65,
+WMO = [None, 0, 1, 2, 3, 3, 80, 80, 85, 80, 80, 85, 95, 95, 61, 66, 71, 63, 66, 73, 65,
        67, 75, 95, 95, 95, 1, 3, 45, 80, 85, 80, 80, 81, 86, 3, 95, 95, 95, 95, 95, 95, 95]
 
 
+def is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def wmo(icon):
-    if not isinstance(icon, int):
+    if not is_int(icon):
         return None
     index = icon % 100
     return WMO[index] if 0 < index < len(WMO) else None
@@ -39,13 +53,12 @@ def wmo(icon):
 
 def get_json(url):
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    # Two requests must fit in the 30 s Dux Shell gives a plugin.
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=max(1, DEADLINE - time.monotonic())) as response:
         return json.load(response)
 
 
 def local_iso(ms):
-    return datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%dT%H:%M")
+    return datetime.fromtimestamp(ms / 1000, ZONE).strftime("%Y-%m-%dT%H:%M")
 
 
 def cache_path():
@@ -53,14 +66,34 @@ def cache_path():
     return os.path.join(base, "dms-meteoswiss-weather", "postcodes.json")
 
 
-def postcode(lat, lon):
-    key = f"{lat:.3f},{lon:.3f}"
-    path = cache_path()
+def read_cache(path):
     try:
         with open(path, encoding="utf-8") as f:
             cache = json.load(f)
     except (OSError, ValueError):
-        cache = {}
+        return {}
+    if not isinstance(cache, dict):
+        return {}
+    return {key: code for key, code in cache.items() if code is None or is_int(code)}
+
+
+def write_cache(path, cache):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+        os.replace(tmp, path)
+    except OSError:
+        os.unlink(tmp)
+
+
+def postcode(lat, lon):
+    # Rounded to about 100 m, which is all swisstopo gets to see.
+    lat, lon = round(lat, 3), round(lon, 3)
+    key = f"{lat:.3f},{lon:.3f}"
+    path = cache_path()
+    cache = read_cache(path)
     if key in cache:
         if cache[key] is None:
             raise SystemExit("MeteoSwiss covers Switzerland only")
@@ -77,22 +110,26 @@ def postcode(lat, lon):
     results = get_json(f"{SWISSTOPO}?{query}").get("results") or []
     attrs = results[0].get("attributes", {}) if results else {}
     # Remember misses too, so a location abroad is not looked up on every refresh.
-    code = attrs["plz"] * 100 + int(attrs.get("zusziff") or 0) if isinstance(attrs.get("plz"), int) else None
+    code = attrs["plz"] * 100 + int(attrs.get("zusziff") or 0) if is_int(attrs.get("plz")) else None
 
     cache[key] = code
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(cache, f)
+    write_cache(path, cache)
     if code is None:
         raise SystemExit("MeteoSwiss covers Switzerland only")
     return code
 
 
 def finite(value):
-    return value if isinstance(value, (int, float)) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
 
 
-def to_open_meteo(data):
+def day_or_night(icon):
+    return (0 if icon > 100 else 1) if is_int(icon) else None
+
+
+def to_open_meteo(data, lat, lon):
     graph = data.get("graph") or {}
     temps = graph.get("temperatureMean1h")
     current = data.get("currentWeather")
@@ -116,6 +153,8 @@ def to_open_meteo(data):
         "wind_speed_10m": [hourly_value("windSpeed1h", i) for i in hours],
         "weather_code": [wmo(three_hourly("weatherIcon3h", i)) for i in hours],
         "precipitation_probability": [finite(three_hourly("precipitationProbability3h", i)) for i in hours],
+        # Night pictograms are numbered from 101.
+        "is_day": [day_or_night(three_hourly("weatherIcon3h", i)) for i in hours],
     }
 
     days = data.get("forecast") or []
@@ -125,7 +164,7 @@ def to_open_meteo(data):
 
     def day_probability(i):
         values = [p for p in probabilities[i * 8:i * 8 + 8] if finite(p) is not None]
-        return max(values) if len(values) == 8 else None
+        return max(values) if values else None
 
     daily = {
         "time": [day.get("dayDate") for day in days],
@@ -140,31 +179,40 @@ def to_open_meteo(data):
     now_ms = current.get("time") if isinstance(current.get("time"), (int, float)) else time.time() * 1000
     hour = int((now_ms - start) // HOUR_MS)
     icon = current.get("icon")
-    return {
-        "utc_offset_seconds": int(datetime.now().astimezone().utcoffset().total_seconds()),
+    offset = datetime.now(ZONE).astimezone(ZONE).utcoffset()
+    forecast = {
+        "latitude": lat,
+        "longitude": lon,
+        "utc_offset_seconds": int(offset.total_seconds()),
         "current": {
             "time": local_iso(now_ms),
             "temperature_2m": finite(current.get("temperature")),
             "wind_speed_10m": hourly_value("windSpeed1h", hour),
             "wind_direction_10m": finite(three_hourly("windDirection3h", hour)),
             "weather_code": wmo(icon),
-            "is_day": 1 if isinstance(icon, int) and icon < 100 else 0,
+            "is_day": day_or_night(icon),
         },
         "hourly": hourly,
         "daily": daily,
     }
+    if ZONE_NAME:
+        forecast["timezone"] = ZONE_NAME
+    return forecast
 
 
 def main():
     if len(sys.argv) == 3:
         lat, lon = float(sys.argv[1]), float(sys.argv[2])
     elif len(sys.argv) == 1:
-        query = json.load(sys.stdin)
-        lat, lon = float(query["latitude"]), float(query["longitude"])
+        try:
+            query = json.load(sys.stdin)
+            lat, lon = float(query["latitude"]), float(query["longitude"])
+        except (ValueError, KeyError, TypeError):
+            raise SystemExit('expected {"latitude": ..., "longitude": ...} on stdin') from None
     else:
         raise SystemExit(__doc__)
     data = get_json(FORECAST.format(postcode(lat, lon)))
-    json.dump(to_open_meteo(data), sys.stdout)
+    json.dump(to_open_meteo(data, lat, lon), sys.stdout, allow_nan=False)
 
 
 if __name__ == "__main__":

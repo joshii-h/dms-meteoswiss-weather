@@ -11,8 +11,9 @@ Open-Meteo and MET Norway.
 
 ## Requirements
 
-- Dux Shell with weather provider plugins. That support is not released yet;
-  it is proposed upstream (see
+- Dux Shell with weather provider plugins (the `weather.plugins` capability of
+  dms). That support is not released yet; it is being moved into dms together
+  with the built-in providers (see
   [#3871](https://github.com/duxlabs-dev/dux-shell/issues/3871)).
 - `python3` (standard library only)
 - A weather location in Switzerland. Elsewhere the plugin reports an error
@@ -77,8 +78,8 @@ echo '{"latitude": 46.948, "longitude": 7.4474}' | ./weather.py | python3 -m jso
   about 30 MB per parameter, which does not suit a widget that refreshes
   every 15 minutes.
 - **Switzerland only.**
-- **Privacy.** The coordinates go to swisstopo once per location, and the
-  postcode goes to MeteoSwiss on each refresh.
+- **Privacy.** The coordinates, rounded to about 100 m, go to swisstopo once
+  per location, and the postcode goes to MeteoSwiss on each refresh.
 
 Weather data: Source: MeteoSwiss. This plugin is not affiliated with or
 endorsed by MeteoSwiss.

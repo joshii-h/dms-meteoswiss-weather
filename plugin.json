@@ -15,7 +15,8 @@
     ],
     "weather": {
         "command": "./weather.py",
-        "name": "MeteoSwiss"
+        "name": "MeteoSwiss",
+        "url": "https://www.meteoswiss.admin.ch"
     },
     "license": "MIT"
 }
