@@ -1,8 +1,8 @@
 {
     "id": "meteoswissWeather",
     "name": "MeteoSwiss Weather",
-    "description": "Weather provider with the MeteoSwiss forecast for Switzerland",
-    "version": "0.1.0",
+    "description": "Weather provider with the MeteoSwiss forecast and NABEL air quality for Switzerland",
+    "version": "0.2.0",
     "author": "joshii-h",
     "icon": "partly_cloudy_day",
     "type": "weather",
