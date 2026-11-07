@@ -16,10 +16,10 @@ import json
 import math
 import os
 import sys
-import time
-import urllib.parse
 import tempfile
 import threading
+import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -27,7 +27,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 # python3 -I leaves the script's directory off sys.path; the modules next to
 # this file are needed all the same.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Without airquality there are no field names either, and nothing is added.
+AQ_FIELDS = ()
+NABEL_IMPORT_ERROR = None
 try:
+    from airquality import FIELDS as AQ_FIELDS
     import nabel
 except Exception as error:  # noqa: BLE001 - air quality must never stop the forecast
     nabel = None
@@ -222,7 +226,7 @@ def air_quality(lat, lon):
     cannot keep the forecast from being printed."""
     if nabel is None:
         print(f"air quality unavailable: {NABEL_IMPORT_ERROR}", file=sys.stderr)
-        return dict.fromkeys(("european_aqi", "us_aqi", "pm2_5", "pm10", "pm2_5_mean_24h"))
+        return dict.fromkeys(AQ_FIELDS)
     result = {}
 
     def run():
@@ -237,7 +241,7 @@ def air_quality(lat, lon):
     if "value" in result:
         fields, note = result["value"]
     else:
-        fields, note = dict(nabel.NO_DATA), f"air quality unavailable: {result.get('error') or 'NABEL took too long'}"
+        fields, note = dict.fromkeys(AQ_FIELDS), f"air quality unavailable: {result.get('error') or 'NABEL took too long'}"
     if note:
         print(note, file=sys.stderr)
     return fields

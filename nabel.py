@@ -6,6 +6,7 @@ Meteotest. It is not a documented API and may change. Every failure here
 only leaves the air quality readings empty; the forecast never depends on it.
 """
 
+import contextlib
 import json
 import math
 import os
@@ -15,7 +16,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from airquality import european_aqi, finite, mean_24h, round_half_up, us_aqi
+from airquality import FIELDS, european_aqi, finite, mean_24h, round_half_up, us_aqi
 
 APP = "dms-meteoswiss-weather"
 URL = "https://bafu.meteotest.ch/nabel/index.php/ausgabe/index/german?webgrab=no"
@@ -61,7 +62,6 @@ RESULT_TTL = 30 * 60
 # No request is started with less time than this left before the deadline.
 MIN_TIME = 3
 
-FIELDS = ("european_aqi", "us_aqi", "pm2_5", "pm10", "pm2_5_mean_24h")
 NO_DATA = dict.fromkeys(FIELDS)
 
 
@@ -224,10 +224,8 @@ def write_cache(path, cache, now_s):
             json.dump(cache, f, allow_nan=False)
         os.replace(tmp, path)
     except (OSError, ValueError):
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
 
 
 def air_quality(lat, lon, now, deadline, user_agent):

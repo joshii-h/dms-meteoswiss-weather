@@ -20,8 +20,8 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 import nabel  # noqa: E402
 import weather  # noqa: E402
+from airquality import FIELDS as AQ_FIELDS  # noqa: E402
 
-AQ_FIELDS = ("european_aqi", "us_aqi", "pm2_5", "pm10", "pm2_5_mean_24h")
 # Local midnight of 7 November 2026 in Zurich (CET), in ms.
 START = int(datetime(2026, 11, 7, 0, 0, tzinfo=weather.ZONE).timestamp() * 1000)
 HOUR = weather.HOUR_MS
@@ -161,6 +161,7 @@ class Isolated(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             shutil.copy(os.path.join(ROOT, "weather.py"), tmp)
+            shutil.copy(os.path.join(ROOT, "airquality.py"), tmp)
             with open(os.path.join(tmp, "nabel.py"), "w", encoding="utf-8") as f:
                 f.write("raise ImportError('broken')\n")
             code = ("import runpy, sys; g = runpy.run_path(sys.argv[1]); "

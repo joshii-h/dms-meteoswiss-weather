@@ -9,6 +9,9 @@ at 500. All concentrations in µg/m³.
 import math
 from datetime import timedelta
 
+# The air quality fields of Open-Meteo's "current" that the plugin fills in.
+FIELDS = ("european_aqi", "us_aqi", "pm2_5", "pm10", "pm2_5_mean_24h")
+
 # The EEA's 75 % of 24 hours for a daily mean, as in dux-go.
 MIN_HOURS_FOR_MEAN = 18
 
