@@ -41,6 +41,11 @@ def csv(columns, rows, station="Härkingen-A1"):
     return "\r\n".join(lines) + "\r\n"
 
 
+def parse(text):
+    """The series of a NABEL answer, without the station name."""
+    return nabel.parse_csv(text)[1]
+
+
 def hourly_rows(values, last_end=LAST_HOUR):
     """Rows with one PM2.5 value each, the last one ending at last_end."""
     rows = []
@@ -60,7 +65,7 @@ class Response(io.BytesIO):
 
 class Parsing(unittest.TestCase):
     def test_real_answer(self):
-        series = nabel.parse_csv(fixture_text())
+        series = parse(fixture_text())
         # Bern-Bollwerk measures no SO2, so there is no column and no series.
         self.assertEqual(set(series), {"o3", "no2", "pm10", "pm25"})
         # 48 rows, of which the 8 future ones up to midnight are empty.
@@ -71,20 +76,20 @@ class Parsing(unittest.TestCase):
 
     def test_columns_by_name_not_position(self):
         text = csv(["PM2.5", "SO2", "O3", "PM10", "NO2"], [("07.11.2026 16:00", [1.5, 2.5, 3.5, 4.5, 5.5])])
-        series = nabel.parse_csv(text)
+        series = parse(text)
         self.assertEqual({p: v[0][1] for p, v in series.items()},
                          {"pm25": 1.5, "so2": 2.5, "o3": 3.5, "pm10": 4.5, "no2": 5.5})
 
     def test_unknown_columns_and_units_are_skipped(self):
         text = csv(["CO", "PM2.5"], [("07.11.2026 16:00", [400, 8])]).replace(
             "PM2.5 [ug/m3]", "PM2.5 [ppb]")
-        self.assertEqual(nabel.parse_csv(text), {})
+        self.assertEqual(parse(text), {})
 
     def test_empty_bad_and_negative_fields_are_left_out(self):
         text = csv(["PM2.5"], [("07.11.2026 14:00", ["x"]), ("07.11.2026 15:00", [-1]),
                                ("07.11.2026 16:00", [7]), ("07.11.2026 17:00", [None]),
                                ("kaputt", [9]), ("07.11.2026 18:00", ["nan"])])
-        self.assertEqual(nabel.parse_csv(text)["pm25"], [(LAST_HOUR, 7.0)])
+        self.assertEqual(parse(text)["pm25"], [(LAST_HOUR, 7.0)])
 
     def test_latin1_umlauts_in_the_header(self):
         raw = csv(["PM2.5"], [("07.11.2026 16:00", [7])], station="Härkingen-A1").encode("latin-1")
@@ -92,12 +97,41 @@ class Parsing(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", return_value=Response(raw)):
             text = nabel.fetch_csv(7, NOW, time.monotonic() + 10, UA)
         self.assertIn("Härkingen", text)
-        self.assertEqual(nabel.parse_csv(text)["pm25"], [(LAST_HOUR, 7.0)])
+        self.assertEqual(parse(text)["pm25"], [(LAST_HOUR, 7.0)])
 
     def test_no_table_is_an_error(self):
         for text in ("", "<html>Wartungsarbeiten</html>", "Station: Bern\nQuelle: NABEL\n"):
             with self.subTest(text=text), self.assertRaises(ValueError):
-                nabel.parse_csv(text)
+                parse(text)
+
+    def test_station_name(self):
+        self.assertEqual(nabel.parse_csv(fixture_text())[0], "Bern-Bollwerk")
+        self.assertEqual(nabel.parse_csv(csv(["PM2.5"], [], station="Sion-Aéroport-A9"))[0],
+                         "Sion-Aéroport-A9")
+        self.assertIsNone(nabel.parse_csv(csv(["PM2.5"], []).split("\r\n", 1)[1])[0])
+
+    def test_byte_order_mark(self):
+        text = csv(["PM2.5"], [("07.11.2026 16:00", [7])])
+        for bom in ("\ufeff", "\ufeff".encode("utf-8").decode("latin-1")):
+            # The mark before the table's header line as well as before the first line.
+            for where in (text, text.replace("Datum/Zeit", bom + "Datum/Zeit")):
+                with self.subTest(bom=bom, header=where is not text):
+                    station, series = nabel.parse_csv(bom + where)
+                    self.assertEqual((station, series["pm25"]), ("Härkingen-A1", [(LAST_HOUR, 7.0)]))
+
+    def test_microgram_spellings(self):
+        rows = [("07.11.2026 16:00", [7])]
+        for unit in ("ug/m3", "µg/m3", "µg/m³", "µg/m³".encode("utf-8").decode("latin-1")):
+            with self.subTest(unit=unit):
+                text = csv(["PM2.5"], rows).replace("[ug/m3]", f"[{unit}]")
+                self.assertEqual(parse(text)["pm25"], [(LAST_HOUR, 7.0)])
+        for unit in ("ppb", "ppm", "mg/m3x"):
+            with self.subTest(unit=unit):
+                self.assertEqual(parse(csv(["PM2.5"], rows).replace("[ug/m3]", f"[{unit}]")), {})
+
+    def test_whitespace_in_the_time(self):
+        rows = [("07.11.2026  16:00", [7]), ("07.11.2026\t17:00", [8]), (" 07.11.2026 18:00 ", [9])]
+        self.assertEqual([v for _, v in parse(csv(["PM2.5"], rows))["pm25"]], [7.0, 8.0, 9.0])
 
 
 class Times(unittest.TestCase):
@@ -114,7 +148,7 @@ class Times(unittest.TestCase):
 
 
 class Freshness(unittest.TestCase):
-    series = staticmethod(lambda: nabel.parse_csv(fixture_text()))
+    series = staticmethod(lambda: parse(fixture_text()))
 
     def test_values_from_the_real_answer(self):
         self.assertEqual(nabel.readings(self.series(), NOW), {
@@ -134,24 +168,24 @@ class Freshness(unittest.TestCase):
 
     def test_value_from_the_future_is_ignored(self):
         rows = hourly_rows([5.0, 6.0]) + [("07.11.2026 18:00", [80.0])]
-        series = nabel.parse_csv(csv(["PM2.5"], rows))
+        series = parse(csv(["PM2.5"], rows))
         self.assertEqual(nabel.readings(series, NOW)["pm2_5"], 6.0)
 
     def test_stale_pollutant_is_left_out(self):
         rows = [("07.11.2026 11:00", [5.0, 200.0]), ("07.11.2026 16:00", [5.0, None])]
-        series = nabel.parse_csv(csv(["PM2.5", "NO2"], rows))
+        series = parse(csv(["PM2.5", "NO2"], rows))
         # NO2 200 from five hours ago would make the index 140.
         self.assertEqual(nabel.readings(series, NOW)["european_aqi"], 20)
 
     def test_no_pm25_means_no_reading(self):
         # Like Chaumont and Davos, which measure no PM2.5.
-        series = nabel.parse_csv(csv(["O3", "NO2", "PM10"], [("07.11.2026 16:00", [40, 7, 10])]))
+        series = parse(csv(["O3", "NO2", "PM10"], [("07.11.2026 16:00", [40, 7, 10])]))
         self.assertIsNone(nabel.readings(series, NOW))
 
 
 class Mean(unittest.TestCase):
     def readings(self, values):
-        return nabel.readings(nabel.parse_csv(csv(["PM2.5"], hourly_rows(values))), NOW)
+        return nabel.readings(parse(csv(["PM2.5"], hourly_rows(values))), NOW)
 
     def test_18_of_24_hours(self):
         # Six gaps leave 18 hours: enough for a mean.
@@ -174,7 +208,7 @@ class Mean(unittest.TestCase):
     def test_window_does_not_end_now(self):
         # The latest hour is almost 3 hours old; its 24 hours count, not the
         # 24 before now, which would hold only 22 of them: 250 / 22 = 11.4.
-        series = nabel.parse_csv(csv(["PM2.5"], hourly_rows([40.0] * 3 + [10.0] * 21)))
+        series = parse(csv(["PM2.5"], hourly_rows([40.0] * 3 + [10.0] * 21)))
         result = nabel.readings(series, LAST_HOUR + timedelta(hours=2, minutes=50))
         self.assertEqual(result["pm2_5_mean_24h"], 13.8)
 
@@ -247,7 +281,11 @@ class TempCache(unittest.TestCase):
 
     def lookup(self, text=None, now=NOW, error=None, where=BERN):
         """air_quality with fetch_csv mocked; returns (result, number of requests)."""
-        fetch = mock.Mock(return_value=fixture_text() if text is None else text, side_effect=error)
+        if text is None:
+            # The real answer, as if it came from the station asked for.
+            station = nabel.nearest_station(*where)
+            text = fixture_text().replace("Bern-Bollwerk", station[1] if station else "")
+        fetch = mock.Mock(return_value=text, side_effect=error)
         with mock.patch.object(nabel, "fetch_csv", fetch):
             result = nabel.air_quality(*where, now, time.monotonic() + 10, UA)
         return result, fetch.call_count
@@ -266,7 +304,7 @@ class Cache(TempCache):
         self.assertEqual((first, calls), (second, 0))
 
     def test_no_fresh_data_is_cached_too(self):
-        text = csv(["O3", "PM10"], [("07.11.2026 16:00", [40, 10])])
+        text = csv(["O3", "PM10"], [("07.11.2026 16:00", [40, 10])], station="Bern-Bollwerk")
         (fields, note), calls = self.lookup(text)
         self.assertEqual(fields, nabel.NO_DATA)
         self.assertIn("no PM2.5", note)
@@ -282,6 +320,21 @@ class Cache(TempCache):
                 self.assertFalse(os.path.exists(self.path))
         # The next refresh asks again.
         self.assertEqual(self.lookup()[1], 1)
+
+    def test_answer_for_another_station_is_an_error(self):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), self.assertRaises(ValueError):
+            self.lookup(fixture_text().replace("Station: Bern-Bollwerk", "Station: Basel-Binningen"))
+        self.assertIn("Basel-Binningen", err.getvalue())
+        self.assertFalse(os.path.exists(self.path))
+        # Without a station line, nothing says the answer is for the right one.
+        with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(ValueError):
+            self.lookup(fixture_text().replace("Station: Bern-Bollwerk", "Stadt: Bern"))
+        self.assertFalse(os.path.exists(self.path))
+        # Case and accents do not count.
+        text = csv(["PM2.5"], hourly_rows([7.0]), station="ZURICH-KASERNE")
+        (fields, _), calls = self.lookup(text, where=(47.37, 8.54))
+        self.assertEqual((fields["pm2_5"], calls), (7.0, 1))
 
     def test_no_station_no_request(self):
         (fields, note), calls = self.lookup(where=(46.6, 10.2))

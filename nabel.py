@@ -10,8 +10,11 @@ import contextlib
 import json
 import math
 import os
+import re
+import sys
 import tempfile
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -24,10 +27,18 @@ URL = "https://bafu.meteotest.ch/nabel/index.php/ausgabe/index/german?webgrab=no
 POLLUTANT_IDS = (1, 2, 3, 6, 7)
 # Column names in the CSV header, without the unit.
 COLUMNS = {"O3": "o3", "NO2": "no2", "SO2": "so2", "PM10": "pm10", "PM2.5": "pm25"}
-UNITS = ("ug/m3", "µg/m3", "µg/m³")
+# Micrograms per cubic metre in any spelling: ug/m3, µg/m³, and µg/m³ as
+# UTF-8 read as latin-1 ("Âµg/mÂ³"). ppb and ppm do not match.
+UNIT = re.compile(r"g/mÂ?[3³]$")
+# A UTF-8 byte order mark, as such and as UTF-8 read as latin-1.
+BOMS = ("\ufeff", "ï»¿")
 
-# The NABEL stations: names and coordinates from the geo.admin layer
-# ch.bafu.nabelstationen, ids from the station list of the query form.
+# The NABEL stations: ids and names from the station list of the query form,
+# as it writes them in the "Station:" line of its answer; checked in one
+# request for all 16 stations on 2026-11-07. Coordinates from the geo.admin
+# layer ch.bafu.nabelstationen, which names some stations differently
+# ("Sion-Aerodrome", "Zuerich", "Davos"). Chaumont and Davos measure no
+# PM2.5, the other 14 do (also checked on 2026-11-07).
 # (id, name, latitude, longitude)
 STATIONS = (
     (1, "Bern-Bollwerk", 46.950993, 7.440866),
@@ -85,7 +96,7 @@ def parse_time(text):
     """End of the hourly interval as an aware datetime, None if unreadable.
     The last hour of a day is written as 24:00 or as 00:00 of the next."""
     try:
-        day, clock = text.strip().split(" ")
+        day, clock = text.split()
         hour, minute = clock.split(":")
         base = datetime.strptime(day, "%d.%m.%Y").replace(tzinfo=CET)
         hour, minute = int(hour), int(minute)
@@ -96,13 +107,31 @@ def parse_time(text):
     return base + timedelta(hours=hour, minutes=minute)
 
 
+def strip_bom(line):
+    for bom in BOMS:
+        line = line.removeprefix(bom)
+    return line
+
+
+def same_station(a, b):
+    """Whether two station names are the same, ignoring case and accents."""
+    def key(name):
+        name = unicodedata.normalize("NFKD", name.strip().casefold())
+        return "".join(c for c in name if not unicodedata.combining(c))
+    return key(a) == key(b)
+
+
 def parse_csv(text):
-    """Hourly values by pollutant, each a list of (end of hour, value), oldest
-    first; empty fields are left out. Columns are found by their header name,
-    since a station only lists the pollutants it measures. ValueError when
-    there is no data table."""
-    lines = text.splitlines()
+    """(station, series): the name in the answer's "Station:" line, None
+    without one, and the hourly values by pollutant, each a list of (end of
+    hour, value), oldest first; empty fields are left out. Columns are found
+    by their header name, since a station only lists the pollutants it
+    measures. ValueError when there is no data table."""
+    lines = [strip_bom(line) for line in text.splitlines()]
+    station = None
     for i, line in enumerate(lines):
+        if line.startswith("Station:") and station is None:
+            station = line.partition(":")[2].strip()
         if line.startswith("Datum/Zeit"):
             break
     else:
@@ -110,7 +139,7 @@ def parse_csv(text):
     columns = {}
     for index, name in enumerate(lines[i].split(";")):
         label, _, unit = name.strip().partition(" [")
-        if label in COLUMNS and unit.rstrip("]").strip() in UNITS:
+        if label in COLUMNS and UNIT.search(unit.rstrip("]").strip()):
             columns[index] = COLUMNS[label]
     series = {pollutant: [] for pollutant in columns.values()}
     for line in lines[i + 1:]:
@@ -127,7 +156,7 @@ def parse_csv(text):
                 continue
             if math.isfinite(value) and value >= 0:
                 series[pollutant].append((end, value))
-    return series
+    return station, series
 
 
 def latest(hours, now):
@@ -232,7 +261,7 @@ def air_quality(lat, lon, now, deadline, user_agent):
     """(fields, note): the air quality fields of the nearest station, all None
     when there is none or it has no fresh PM2.5, and a note for stderr or
     None. Results and the lack of fresh data are cached for RESULT_TTL;
-    errors raise and are not cached."""
+    errors raise and are not cached, also an answer for another station."""
     station = nearest_station(lat, lon)
     if station is None:
         return dict(NO_DATA), None
@@ -244,7 +273,11 @@ def air_quality(lat, lon, now, deadline, user_agent):
     if valid_entry(entry, now_s):
         current = entry["current"]
     else:
-        current = readings(parse_csv(fetch_csv(sid, now, deadline, user_agent)), now)
+        station_name, series = parse_csv(fetch_csv(sid, now, deadline, user_agent))
+        if station_name is None or not same_station(station_name, name):
+            print(f"NABEL answered for {station_name!r} instead of {name!r}", file=sys.stderr)
+            raise ValueError(f"NABEL answer is not for station {name}")
+        current = readings(series, now)
         cache[str(sid)] = {"at": now_s, "current": current}
         write_cache(path, cache, now_s)
     if current is None:
