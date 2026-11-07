@@ -18,9 +18,19 @@ import sys
 import time
 import urllib.parse
 import tempfile
+import threading
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+# python3 -I leaves the script's directory off sys.path; the modules next to
+# this file are needed all the same.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import nabel
+except Exception as error:  # noqa: BLE001 - air quality must never stop the forecast
+    nabel = None
+    NABEL_IMPORT_ERROR = error
 
 USER_AGENT = "dms-meteoswiss-weather (+https://github.com/joshii-h/dms-meteoswiss-weather)"
 SWISSTOPO = "https://api3.geo.admin.ch/rest/services/api/MapServer/identify"
@@ -200,6 +210,33 @@ def to_open_meteo(data, lat, lon):
     return forecast
 
 
+def air_quality(lat, lon):
+    """The air quality fields for current, all None when NABEL has nothing or
+    fails. Runs in a thread that is given up at the deadline, so a slow answer
+    cannot keep the forecast from being printed."""
+    if nabel is None:
+        print(f"air quality unavailable: {NABEL_IMPORT_ERROR}", file=sys.stderr)
+        return dict.fromkeys(("european_aqi", "us_aqi", "pm2_5", "pm10", "pm2_5_mean_24h"))
+    result = {}
+
+    def run():
+        try:
+            result["value"] = nabel.air_quality(lat, lon, datetime.now(timezone.utc), DEADLINE, USER_AGENT)
+        except BaseException as error:  # noqa: BLE001
+            result["error"] = error
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(max(0, DEADLINE - time.monotonic()))
+    if "value" in result:
+        fields, note = result["value"]
+    else:
+        fields, note = dict(nabel.NO_DATA), f"air quality unavailable: {result.get('error') or 'NABEL took too long'}"
+    if note:
+        print(note, file=sys.stderr)
+    return fields
+
+
 def main():
     if len(sys.argv) == 3:
         lat, lon = float(sys.argv[1]), float(sys.argv[2])
@@ -212,7 +249,9 @@ def main():
     else:
         raise SystemExit(__doc__)
     data = get_json(FORECAST.format(postcode(lat, lon)))
-    json.dump(to_open_meteo(data, lat, lon), sys.stdout, allow_nan=False)
+    forecast = to_open_meteo(data, lat, lon)
+    forecast["current"].update(air_quality(lat, lon))
+    json.dump(forecast, sys.stdout, allow_nan=False)
 
 
 if __name__ == "__main__":
