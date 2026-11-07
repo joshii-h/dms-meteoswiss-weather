@@ -11,6 +11,7 @@ is not an official API and may change. Outside Switzerland there is no
 postcode, so the script fails and Dux Shell moves on to the next provider.
 """
 
+import contextlib
 import json
 import math
 import os
@@ -88,14 +89,19 @@ def read_cache(path):
 
 
 def write_cache(path, cache):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    # The cache only saves a lookup; failing to write it must not cost the forecast.
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    except OSError:
+        return
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(cache, f)
         os.replace(tmp, path)
     except OSError:
-        os.unlink(tmp)
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
 
 
 def postcode(lat, lon):

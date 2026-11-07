@@ -70,6 +70,19 @@ class Mapping(unittest.TestCase):
         self.assertIsNone(forecast["current"]["weather_code"])
 
 
+class PostcodeCache(unittest.TestCase):
+    def test_unwritable_cache_does_not_cost_the_postcode(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            # A file where the cache directory should be: makedirs fails.
+            blocker = os.path.join(home, "dms-meteoswiss-weather")
+            open(blocker, "w").close()
+            answer = {"results": [{"attributes": {"plz": 3000, "zusziff": 0}}]}
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": home}), \
+                    mock.patch.object(weather, "get_json", return_value=answer):
+                self.assertEqual(weather.postcode(46.95, 7.45), 300000)
+
+
 class Main(unittest.TestCase):
     def setUp(self):
         patches = [mock.patch.object(weather, "DEADLINE", time.monotonic() + 12),
