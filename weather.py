@@ -220,12 +220,18 @@ def to_open_meteo(data, lat, lon):
     return forecast
 
 
+def describe(error):
+    """The error's type and message, the type alone when the message is empty."""
+    message = str(error)
+    return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+
 def air_quality(lat, lon):
     """The air quality fields for current, all None when NABEL has nothing or
     fails. Runs in a thread that is given up at the deadline, so a slow answer
     cannot keep the forecast from being printed."""
     if nabel is None:
-        print(f"air quality unavailable: {NABEL_IMPORT_ERROR}", file=sys.stderr)
+        print(f"air quality unavailable: {describe(NABEL_IMPORT_ERROR)}", file=sys.stderr)
         return dict.fromkeys(AQ_FIELDS)
     result = {}
 
@@ -241,7 +247,9 @@ def air_quality(lat, lon):
     if "value" in result:
         fields, note = result["value"]
     else:
-        fields, note = dict.fromkeys(AQ_FIELDS), f"air quality unavailable: {result.get('error') or 'NABEL took too long'}"
+        error = result.get("error")
+        fields = dict.fromkeys(AQ_FIELDS)
+        note = f"air quality unavailable: {describe(error) if error else 'NABEL took too long'}"
     if note:
         print(note, file=sys.stderr)
     return fields

@@ -111,7 +111,7 @@ class Main(unittest.TestCase):
 
     def test_every_nabel_failure_leaves_only_air_quality_empty(self):
         for error in (RuntimeError("boom"), OSError("unreachable"), ValueError("no table"),
-                      TimeoutError("slow"), SystemExit("stop"), KeyboardInterrupt()):
+                      TimeoutError("slow"), SystemExit("stop"), KeyboardInterrupt(), OSError()):
             with self.subTest(error=type(error).__name__):
                 with mock.patch.object(nabel, "air_quality", side_effect=error):
                     forecast, err = self.run_main()
@@ -119,7 +119,9 @@ class Main(unittest.TestCase):
                 self.assertEqual([forecast["current"][f] for f in AQ_FIELDS], [None] * 5)
                 self.assertIn("air quality unavailable", err)
                 self.assertNotIn("took too long", err)
+                self.assertIn(f"air quality unavailable: {type(error).__name__}", err)
                 self.assertIn(str(error), err)
+                self.assertNotIn(": \n", err)
 
     def test_real_nabel_code_with_a_failing_request(self):
         import urllib.error
