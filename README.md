@@ -11,10 +11,8 @@ Open-Meteo and MET Norway.
 
 ## Requirements
 
-- Dux Shell with weather provider plugins (the `weather.plugins` capability of
-  dms). That support is not released yet; it is being moved into dms together
-  with the built-in providers (see
-  [#3871](https://github.com/duxlabs-dev/dux-shell/issues/3871)).
+- Dux Shell 2.1.1 or newer, the first release whose dms runs weather provider
+  plugins (the `weather.plugins` capability).
 - `python3` (standard library only)
 - A weather location in Switzerland. Elsewhere the plugin reports an error
   and Dux Shell moves on to the next provider.
